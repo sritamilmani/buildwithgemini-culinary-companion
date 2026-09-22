@@ -134,69 +134,74 @@ def generate_culinary_item_video(
 
 
 def generate_recipe_photo(recipe_name: str, description: str = "") -> str:
-    """Generate a photo for a recommended recipe or dish and upload it to Cloud Storage.
+    """Generate a high-quality photo for a recommended recipe or dish using gemini-3.1-flash-lite-image and upload it to Cloud Storage.
     
     Args:
-        recipe_name: Name of the dish or recipe (e.g. 'Mushroom Risotto', 'Vegan Tacos').
+        recipe_name: Name of the dish or recipe (e.g. 'Arrabiata Penne', 'Mushroom Risotto').
         description: Brief description or key visual details of the dish.
         
     Returns:
         JSON string containing the public image URL.
     """
     clean_name = recipe_name.strip()
-    safe_filename = clean_name.lower().replace(" ", "_").replace("/", "_")
+    safe_filename = re.sub(r"[^\w\-_]", "_", clean_name.lower())
     object_name = f"recipe_photos/{safe_filename}_{int(time.time())}.jpg"
     
     image_bytes = None
+    mime_type = "image/jpeg"
     
-    # 1. Attempt Vertex AI Imagen generation
+    # 1. Use gemini-3.1-flash-lite-image in global region for realistic food photography
     try:
-        client = genai.Client(vertexai=True, project=GCP_PROJECT_ID, location=GCP_LOCATION)
+        client = genai.Client(vertexai=True, project=GCP_PROJECT_ID, location="global")
         prompt = f"Gourmet food photo of {clean_name}. {description}. Plated elegantly on a rustic dinner table, professional food photography, 8k resolution."
-        result = client.models.generate_images(
-            model="imagen-3.0-generate-002",
-            prompt=prompt,
-            config=types.GenerateImagesConfig(
-                number_of_images=1,
-                output_mime_type="image/jpeg",
-                aspect_ratio="1:1",
+        resp = client.models.generate_content(
+            model="gemini-3.1-flash-lite-image",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"]
             ),
         )
-        if result.generated_images:
-            image_bytes = result.generated_images[0].image.image_bytes
+        if resp.candidates and resp.candidates[0].content and resp.candidates[0].content.parts:
+            for part in resp.candidates[0].content.parts:
+                if part.inline_data:
+                    image_bytes = part.inline_data.data
+                    if part.inline_data.mime_type:
+                        mime_type = part.inline_data.mime_type
+                    break
     except Exception as e:
-        print(f"Vertex AI Imagen call failed or restricted ({e}); rendering fallback recipe image card...")
+        print(f"Gemini image generation failed ({e}); trying Imagen fallback...")
     
-    # 2. Fallback: Generate a high-quality stylized recipe photo card with Pillow
+    # 2. Fallback: Try Imagen 3
     if not image_bytes:
-        img = Image.new("RGB", (800, 800), color=(34, 40, 49))
-        draw = ImageDraw.Draw(img)
-        
-        # Draw background culinary decorative elements
-        draw.rectangle([40, 40, 760, 760], outline=(236, 179, 101), width=6)
-        draw.rectangle([60, 60, 740, 740], outline=(43, 52, 64), width=3)
-        
-        # Food card header tag
-        draw.rectangle([100, 120, 700, 200], fill=(236, 179, 101))
-        draw.text((120, 140), "CULINARY COMPANION RECIPE", fill=(34, 40, 49))
-        
-        # Dish name & description
-        draw.text((100, 280), f"Dish: {clean_name[:35]}", fill=(255, 255, 255))
-        if description:
-            draw.text((100, 360), f"Details: {description[:50]}", fill=(200, 200, 200))
+        try:
+            client = genai.Client(vertexai=True, project=GCP_PROJECT_ID, location=GCP_LOCATION)
+            prompt = f"Gourmet food photo of {clean_name}. {description}. Plated elegantly, professional food photography."
+            result = client.models.generate_images(
+                model="imagen-3.0-generate-002",
+                prompt=prompt,
+                config=types.GenerateImagesConfig(
+                    number_of_images=1,
+                    output_mime_type="image/jpeg",
+                    aspect_ratio="1:1",
+                ),
+            )
+            if result.generated_images:
+                image_bytes = result.generated_images[0].image.image_bytes
+        except Exception as err:
+            print(f"Imagen fallback failed: {err}")
             
-        draw.text((100, 680), "✨ Freshly Prepared & Customized for You ✨", fill=(236, 179, 101))
+    if not image_bytes:
+        return json.dumps({
+            "status": "error",
+            "message": f"Could not generate image for '{clean_name}'.",
+        })
         
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=90)
-        image_bytes = buffer.getvalue()
-        
-    # 3. Upload to Cloud Storage bucket
+    # 3. Upload image bytes to Cloud Storage bucket
     try:
         storage_client = storage.Client(project=GCP_PROJECT_ID)
         bucket = storage_client.bucket(GCS_BUCKET_NAME)
         blob = bucket.blob(object_name)
-        blob.upload_from_string(image_bytes, content_type="image/jpeg")
+        blob.upload_from_string(image_bytes, content_type=mime_type)
         
         public_url = f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{object_name}"
         return json.dumps({
