@@ -32,10 +32,14 @@ def main():
         time.sleep(1)
         page.click(".send-btn")
         
-        print("Waiting for recipe response card...")
-        # Wait up to 30s for agent response bubble containing card/text
-        page.wait_for_selector(".msg-row.agent", timeout=30000)
-        time.sleep(6) # Let user see the rendered card
+        print("Waiting for agent response to complete...")
+        # Wait until the agent bubble is created AND no longer displaying "…" loading indicator
+        page.wait_for_function(
+            "document.querySelector('.msg-row.agent .bubble') && document.querySelector('.msg-row.agent .bubble').textContent !== '…'",
+            timeout=45000
+        )
+        print("Response received for Step 1! Pausing to display recipe card...")
+        time.sleep(8) # Let user clearly read the rendered card and recipe details
         
         # --- Demo Step 2: Image Generation Tool Call & GCS URL ---
         print("Executing Step 2: Image Generation prompt...")
@@ -44,10 +48,14 @@ def main():
         time.sleep(1)
         page.click(".send-btn")
         
-        print("Waiting for photo generation response...")
-        # Wait for second agent response
-        page.wait_for_function("document.querySelectorAll('.msg-row.agent').length >= 2", timeout=45000)
-        time.sleep(8) # Let user see the generated image card
+        print("Waiting for second agent response to complete...")
+        # Wait until the 2nd agent bubble is created AND no longer displaying "…"
+        page.wait_for_function(
+            "document.querySelectorAll('.msg-row.agent .bubble').length >= 2 && document.querySelectorAll('.msg-row.agent .bubble')[1].textContent !== '…'",
+            timeout=45000
+        )
+        print("Response received for Step 2! Pausing to display generated image...")
+        time.sleep(8) # Let user clearly see the generated photo card
         
         # Get recorded video path before closing
         video_path = page.video.path()
